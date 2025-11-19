@@ -1,0 +1,35 @@
+{
+  "name": "simple-attribution-server",
+  "version": "1.0.0",
+  "description": "A simple attribution server that can work alongside an existing yjs backend",
+  "type": "module",
+  "bin": {
+    "y-simple-attribution-server": "./src/index.js"
+  },
+  "scripts": {
+    "start": "node --env-file .env.testing ./src/index.js",
+    "test": "node --env-file .env.testing tests/index.js",
+    "debug": "node --inspect-brk --env-file .env.testing tests/index.js",
+    "minio": "docker run -p 9000:9000 -p 9001:9001 quay.io/minio/minio server /data --console-address \":9001\"",
+    "lint": "standard && tsc --skipLibCheck"
+  },
+  "keywords": [
+    "yjs"
+  ],
+  "author": "Kevin Jahns <kevin.jahns@protonmail.com>",
+  "license": "MIT",
+  "dependencies": {
+    "@koa/router": "^14.0.0",
+    "koa": "^3.1.1",
+    "lib0": "^0.2.115-2",
+    "minio": "^8.0.6",
+    "yjs": "^14.0.0-13"
+  },
+  "devDependencies": {
+    "@types/koa": "^3.0.1",
+    "@types/koa__router": "^12.0.5",
+    "concurrently": "^9.2.1",
+    "standard": "^17.1.2",
+    "typescript": "^5.9.3"
+  }
+}

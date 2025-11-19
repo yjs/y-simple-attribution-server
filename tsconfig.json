@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "esnext",
+    "lib": ["ESNext", "dom"],
+    "module": "nodenext",
+    "allowJs": true,
+    "checkJs": true,
+    "declaration": true,
+    "declarationMap": true,
+    "outDir": "./dist",
+    "baseUrl": "./",
+    "rootDir": "./",
+    "emitDeclarationOnly": true,
+    "strict": true,
+    "noImplicitAny": true,
+    "moduleResolution": "nodenext",
+    "paths": { }
+  },
+  "include": ["src/**/*.js", "tests/**/*.js"]
+}
