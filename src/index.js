@@ -8,6 +8,7 @@ import * as s from 'lib0/schema'
 import * as env from 'lib0/environment'
 import * as number from 'lib0/number'
 import { scheduleAttributionForMerge, getAttributions } from './merge-queue.js'
+import v8 from 'v8'
 
 /**
  * @typedef {object} AttributedUpdate
@@ -20,6 +21,18 @@ const $attributedUpdate = s.$object({ update: s.$constructedBy(Uint8Array), user
 
 const app = new Koa()
 const router = new Router()
+
+/**
+ * Return available heap-size.
+ *
+ * @return number
+ */
+const checkAvailableHeapSize = () => {
+  const heapStats = v8.getHeapStatistics();
+  const heapUsed = heapStats.used_heap_size;
+  const heapLimit = heapStats.heap_size_limit * .90 // use 90 percent of heap limit max
+  return heapLimit - heapUsed
+}
 
 /**
  * @param {Koa.Context} ctx
@@ -42,6 +55,9 @@ router.post('/:docid', async ctx => {
   const update = new Uint8Array(updateBuf)
   if (!$attributedUpdate.check({ update, user, timestamp })) {
     return ctx.throw(400, 'Expecting parameters: user:string, timestamp:number?')
+  }
+  if (checkAvailableHeapSize() - (update.byteLength * 100) < 0) {
+    return ctx.throw(500, 'Out of memory - rejecting update because there is not emough memory available.')
   }
   try {
     const updateParsed = Y.readUpdateIdRanges(update)
