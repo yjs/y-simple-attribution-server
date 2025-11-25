@@ -32,4 +32,4 @@ npm test
 ## API
 
 - `GET /:docid` - retrieve all attributions for a specific document
-- `POST /:docid?user=userid&timestamp=number body:octet-stream` - Update attributions by sending the binary encoded Yjs update, alongside userid and an optional timestamp, which will be associated to the change.
+- `POST /:docid?user=userid&timestamp=number body:octet-stream` - Update attributions by sending the binary encoded Yjs update, alongside userid and an optional timestamp, which will be associated to the change. You may add more custom attributes as url query parameters. They will be prefixed with a `_`  to avoid collisions with Yjs-native attributes.
