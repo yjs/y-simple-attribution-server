@@ -6,7 +6,7 @@ server only requires an S3 endpoint, which can be configured using environment
 variables.
 
 ```
-y-simple-attribution-server --port 4000
+npx y-simple-attribution-server --port 4000
 ```
 
 ```env
@@ -26,10 +26,17 @@ configuration.
 
 ```
 npm run minio
-npm test
+npm start
 ```
 
 ## API
 
 - `GET /:docid` - retrieve all attributions for a specific document
 - `POST /:docid?user=userid&timestamp=number body:octet-stream` - Update attributions by sending the binary encoded Yjs update, alongside userid and an optional timestamp, which will be associated to the change. You may add more custom attributes as url query parameters. They will be prefixed with a `_`  to avoid collisions with Yjs-native attributes.
+
+## Docker
+
+```
+# configure the environment variables in `compose.yaml` to your s3-compatible backend
+docker compose up
+```
