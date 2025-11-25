@@ -34,10 +34,11 @@ await ensureCleanBucket(bucketName)
  * @param {string} docid
  * @param {string} user
  * @param {Uint8Array} update
+ * @param {{[key:string]:string}} customAttrs
  * @returns {Promise<void>}
  */
-const sendUpdate = async (docid, user, update) => {
-  const queryParams = new URLSearchParams({ user })
+const sendUpdate = async (docid, user, update, customAttrs = {}) => {
+  const queryParams = new URLSearchParams({ user, ...customAttrs })
   const url = `${baseUrl}/${docid}?${queryParams}`
   const response = await fetch(url, {
     method: 'POST',
@@ -80,4 +81,22 @@ export const testSimpleRequest = async _tc => {
   t.assert(clientAttrs[0].attrs.length === 2)
   t.assert(clientAttrs[0].attrs[0].name === 'insert')
   t.assert(clientAttrs[0].attrs[1].name === 'insertAt')
+}
+
+/**
+ * @param {t.TestCase} _tc
+ */
+export const testCustomAttr = async _tc => {
+  const docid = _tc.testName
+  const ydoc = new Y.Doc()
+  ydoc.getText().insert(0, 'hi there')
+  const update = Y.encodeStateAsUpdate(ydoc)
+  await sendUpdate(docid, 'user53', update, { myCustomAttr: '42' })
+  const attrsFetched = await fetchAttributions(docid)
+  t.assert(attrsFetched.clients.size > 0)
+  const clientAttrs = attrsFetched.clients.get(ydoc.clientID)?.getIds() || []
+  t.assert(clientAttrs.length === 1)
+  t.assert(clientAttrs[0].attrs.length === 3)
+  t.assert(clientAttrs[0].attrs[2].name === '_myCustomAttr')
+  t.assert(clientAttrs[0].attrs[2].val === '42')
 }

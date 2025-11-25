@@ -7,6 +7,7 @@ import * as time from 'lib0/time'
 import * as s from 'lib0/schema'
 import * as env from 'lib0/environment'
 import * as number from 'lib0/number'
+import * as object from 'lib0/object'
 import { scheduleAttributionForMerge, getAttributions } from './merge-queue.js'
 import v8 from 'v8'
 
@@ -47,7 +48,10 @@ const getRawBody = async ctx => {
 
 router.post('/:docid', async ctx => {
   const { docid } = ctx.params
-  const { user, timestamp = time.getUnixTime() } = ctx.query
+  let { user, timestamp = time.getUnixTime(), ...customQuery } = ctx.query
+  if (s.$string.check(timestamp)) {
+    timestamp = number.parseInt(timestamp)
+  }
   const updateBuf = await getRawBody(ctx)
   if (!updateBuf.length) {
     ctx.throw(400, 'Missing update data in request body')
@@ -63,6 +67,14 @@ router.post('/:docid', async ctx => {
     const updateParsed = Y.readUpdateIdRanges(update)
     const attributions = Y.createIdMapFromIdSet(updateParsed.inserts, [Y.createAttributionItem('insert', user), Y.createAttributionItem('insertAt', timestamp)])
     Y.insertIntoIdMap(attributions, Y.createIdMapFromIdSet(updateParsed.deletes, [Y.createAttributionItem('delete', user), Y.createAttributionItem('deleteAt', timestamp)]))
+    if (object.size(customQuery) > 0) {
+      const allChanges = Y.mergeIdSets([updateParsed.inserts, updateParsed.deletes])
+      const customAttrs = object.map(customQuery, (val, key) => {
+        s.$string.expect(val)
+        return Y.createAttributionItem('_' + key, val)
+      })
+      Y.insertIntoIdMap(attributions, Y.createIdMapFromIdSet(allChanges, customAttrs))
+    }
     scheduleAttributionForMerge(docid, attributions)
   } catch (err) {
     const errMessage = 'failed to parse update'
