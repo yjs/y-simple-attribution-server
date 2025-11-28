@@ -1,6 +1,10 @@
 /**
- * Attributions are stored in binary form in an s3 bucket. The pattern for the filename is:
- *   y:attrs:v1:${docid}:${timestamp}
+ * Attributions, versions, and Deltas are stored in binary form in an s3 bucket. The pattern for the filenames are:
+ *   - attribution: y:v1:attrs:v1:${docid}:${timestamp}
+ *   - version: y:v1:version:v1:${docid}:${timestamp}
+ *   - version-delta: y:v1:vdelta:v1:${docid}:${timestamp}
+ *
+ * Versions are stored in binary form in an s3 bucket
  *
  * Due to concurrency, it may happen that multiple attribution-files for a single ydoc exist. These
  * will be merged automatically.
@@ -15,6 +19,7 @@ import * as queue from 'lib0/queue'
 import * as promise from 'lib0/promise'
 import * as math from 'lib0/math'
 import * as minio from 'minio'
+import * as delta from 'lib0/delta'
 
 /**
  * Minimum time (in ms) to cache messages before writing an update to s3.
@@ -54,29 +59,102 @@ const getBinaryFile = async (filename) => {
 }
 
 /**
- * @param {string} docid
- * @return {Promise<{ attributions: Y.IdMap<any>[], knownAttributionFileNames: string[] }>}
+ * @param {string} prefix
+ * @param {string} start
+ * @param {string?} end 
+ * @return {Promise<string[]>}
  */
-const getPersistedAttributions = (docid) => promise.create((resolve, reject) => {
+const getFilenamesWithPrefix = async (prefix, start = '', end = null) => {
+  const stream = minioClient.listObjectsV2(bucketName, prefix, true, start)
   /**
    * @type {string[]}
    */
-  const knownAttributionFileNames = []
-  const stream = minioClient.listObjects(bucketName, `y:attrs:v1:${docid}`, true)
-  stream.on('data', (obj) => {
-    if (obj.name != null) knownAttributionFileNames.push(obj.name)
-  })
-  stream.on('error', err => {
-    reject(new Error(`[minio]: Error retrieving attributions (${err.toString()})`))
-  })
-  stream.on('end', async () => {
-    const attributions = await promise.all(knownAttributionFileNames.map(async filename => {
-      const binAttr = await getBinaryFile(filename)
-      return Y.decodeIdMap(binAttr)
-    }))
-    resolve({ attributions, knownAttributionFileNames })
-  })
-})
+  const filenames = []
+  for await (const obj of stream) {
+    if (obj.name) {
+      if (end != null && obj.name < end) { break }
+      filenames.push(obj.name)
+    }
+  }
+  return filenames
+}
+
+/**
+ * @param {string} docid
+ * @return {Promise<{ attributions: Y.IdMap<any>[], knownAttributionFileNames: string[] }>}
+ */
+export const getPersistedAttributions = async (docid) => {
+  const knownAttributionFileNames = await getFilenamesWithPrefix(`y:v1:attrs:${docid}`)
+  const attributions = await promise.all(knownAttributionFileNames.map(async filename => {
+    const binAttr = await getBinaryFile(filename)
+    return Y.decodeIdMap(binAttr)
+  }))
+  return { attributions, knownAttributionFileNames }
+}
+
+/**
+ * @param {string} docid
+ * @param {Uint8Array} bin
+ * @return {Promise<void>}
+ */
+export const storeVersion = async (docid, bin) => {
+  await minioClient.putObject(bucketName, `y:v1:version:${docid}:${time.getUnixTime()}`, Buffer.from(bin))
+}
+
+/**
+ * @param {string} docid
+ * @param {number} timestamp
+ */
+export const getVersion = async (docid, timestamp) => getBinaryFile(`y:v1:version:${docid}:${timestamp}`)
+
+/**
+ * @param {string} docid
+ */
+export const getVersionTimestamps = async (docid) => {
+  const versionNames = await getFilenamesWithPrefix(`y:v1:version:${docid}`)
+  const timestamps = versionNames.map(name =>
+    number.parseInt(name.slice(name.lastIndexOf(':') + 1))
+  )
+  return timestamps
+}
+
+/**
+ * @param {string} docid
+ */
+export const getAllVersionDeltas = async (docid) => {
+  const vtimes = await getVersionTimestamps(docid)
+  debugger
+  const ds = await promise.all(vtimes.map(async (timestamp, index) =>
+    ({ 
+      timestamp,
+      delta: await getVersionDelta(docid, vtimes[index-1] || null, timestamp)
+    })
+  ))
+  return ds
+}
+
+/**
+ * @param {Uint8Array} bin
+ */
+const binToYdoc = bin => {
+  const ydoc = new Y.Doc()
+  Y.applyUpdate(ydoc, bin)
+  return ydoc
+}
+
+/**
+ * @param {string} docid
+ * @param {number?} timestampFrom
+ * @param {number} timestampTo
+ */
+export const getVersionDelta = async (docid, timestampFrom, timestampTo) => {
+  const [v1, v2] = await promise.all([
+    timestampFrom != null ? getVersion(docid, timestampFrom).then(binToYdoc) : promise.resolveWith(new Y.Doc()),
+    getVersion(docid, timestampTo).then(binToYdoc)
+  ])
+  const d = Y.diffDocsToDelta(v1, v2)
+  return d
+}
 
 class MergeQueueItem extends queue.QueueNode {
   /**
@@ -125,7 +203,7 @@ export const getAttributions = async docid => {
 /**
  * This neverending loop consumes the mergeQueue
  */
-const mergeLoop = async () => {
+export const persistenceLoop = async () => {
   while (true) {
     const qitem = queue.dequeue(mergeQueue)
     if (qitem == null) {
@@ -141,7 +219,7 @@ const mergeLoop = async () => {
       if (allAttrs.length > 0) {
         Y.insertIntoIdMap(allAttrs[0], Y.mergeIdMaps(allAttrs.slice(1)))
         const encAttrs = Y.encodeIdMap(allAttrs[0])
-        await minioClient.putObject(bucketName, `y:attrs:v1:${qitem.docid}:${time.getUnixTime()}`, Buffer.from(encAttrs))
+        await minioClient.putObject(bucketName, `y:v1:attrs:${qitem.docid}:${time.getUnixTime()}`, Buffer.from(encAttrs))
         await minioClient.removeObjects(bucketName, knownAttributionFileNames)
       }
       cachedAttrs.splice(0, cacheLen)
@@ -157,9 +235,4 @@ const mergeLoop = async () => {
       queue.enqueue(mergeQueue, new MergeQueueItem(qitem.docid, time.getUnixTime()))
     }
   }
-}
-
-const persistenceConcurrency = number.parseInt(env.getConf('persistence-concurrency') || '3')
-for (let i = 0; i < persistenceConcurrency; i++) {
-  mergeLoop()
 }

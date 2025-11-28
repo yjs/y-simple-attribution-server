@@ -8,7 +8,7 @@ import * as s from 'lib0/schema'
 import * as env from 'lib0/environment'
 import * as number from 'lib0/number'
 import * as object from 'lib0/object'
-import { scheduleAttributionForMerge, getAttributions } from './merge-queue.js'
+import * as db from './db.js'
 import v8 from 'v8'
 
 /**
@@ -22,6 +22,14 @@ const $attributedUpdate = s.$object({ update: s.$constructedBy(Uint8Array), user
 
 const app = new Koa()
 const router = new Router()
+
+/**
+ * Define how many concurrent processes should run that sync the cached data with the database.
+ */
+const persistenceConcurrency = number.parseInt(env.getConf('persistence-concurrency') ?? '3')
+for (let i = 0; i < persistenceConcurrency; i++) {
+  db.persistenceLoop()
+}
 
 /**
  * Return available heap-size.
@@ -46,7 +54,7 @@ const getRawBody = async ctx => {
   return Buffer.concat(chunks)
 }
 
-router.post('/:docid', async ctx => {
+router.post('/attribute/:docid', async ctx => {
   const { docid } = ctx.params
   let { user, timestamp = time.getUnixTime(), ...customQuery } = ctx.query
   if (s.$string.check(timestamp)) {
@@ -67,7 +75,7 @@ router.post('/:docid', async ctx => {
     const updateParsed = Y.readUpdateIdRanges(update)
     const attributions = Y.createIdMapFromIdSet(updateParsed.inserts, [Y.createAttributionItem('insert', user), Y.createAttributionItem('insertAt', timestamp)])
     Y.insertIntoIdMap(attributions, Y.createIdMapFromIdSet(updateParsed.deletes, [Y.createAttributionItem('delete', user), Y.createAttributionItem('deleteAt', timestamp)]))
-    if (object.size(customQuery) > 0) {
+    if (!object.isEmpty(customQuery)) {
       const allChanges = Y.mergeIdSets([updateParsed.inserts, updateParsed.deletes])
       const customAttrs = object.map(customQuery, (val, key) => {
         s.$string.expect(val)
@@ -75,7 +83,7 @@ router.post('/:docid', async ctx => {
       })
       Y.insertIntoIdMap(attributions, Y.createIdMapFromIdSet(allChanges, customAttrs))
     }
-    scheduleAttributionForMerge(docid, attributions)
+    db.scheduleAttributionForMerge(docid, attributions)
   } catch (err) {
     const errMessage = 'failed to parse update'
     console.error(errMessage)
@@ -86,10 +94,39 @@ router.post('/:docid', async ctx => {
   }
 })
 
-router.get('/:docid', async ctx => {
+router.get('/attributions/:docid', async ctx => {
   const docid = ctx.params.docid
-  const attributions = await getAttributions(docid)
+  const attributions = await db.getAttributions(docid)
   ctx.body = Buffer.from(Y.encodeIdMap(attributions))
+  ctx.type = 'application/octet-stream'
+})
+
+router.post('/version/:docid', async ctx => {
+  const docid = ctx.params.docid
+  try {
+    const docContentBuf = await getRawBody(ctx)
+    if (!docContentBuf.length) {
+      ctx.throw(400, 'Missing ydoc data in request body')
+    }
+    const docContent = new Uint8Array(docContentBuf)
+    await db.storeVersion(docid, docContent)
+    ctx.body = {
+      success: true
+    }
+  } catch (e) {
+    return ctx.throw(400, 'unexpected error while parsing version: ' + e)
+  }
+})
+
+router.get('/version-deltas/:docid', async ctx => {
+  const docid = ctx.params.docid
+  const ds = await db.getAllVersionDeltas(docid)
+  ctx.body = {
+    deltas: ds.map(d => ({
+      timestamp: d.timestamp,
+      delta: d.delta.toJSON()
+    }))
+  }
   ctx.type = 'application/octet-stream'
 })
 
